@@ -1,7 +1,9 @@
 import re
+import os
 from typing import Any, Dict, Optional, Tuple
 
 from zone_manager import get_all_zones
+from llm_parser import LLMParser
 
 
 class IntentManager:
@@ -42,11 +44,26 @@ class IntentManager:
     def __init__(self):
         self.intent: Dict[str, Any] = {}
         self.last_query = ""
+        self.llm_parser = None
+        if os.environ.get("GROQ_API_KEY"):
+            self.llm_parser = LLMParser()
 
     def set_intent(self, query: str) -> None:
         self.last_query = query
+        
+        # Try LLM first if available
+        if self.llm_parser:
+            try:
+                llm_intent = self.llm_parser.parse(query)
+                if llm_intent:
+                    self.intent = llm_intent
+                    print("🧠 LLM Parsed Intent:", self.intent)
+                    return
+            except Exception as e:
+                print("⚠️ LLM Parsing failed, falling back to rules:", e)
+
         self.intent = self._rule_based_parse(query)
-        print("🧠 Parsed Intent:", self.intent)
+        print("🧠 Rule-Based Intent:", self.intent)
 
     def get_filters(self) -> Dict[str, Any]:
         filters: Dict[str, Any] = {}

@@ -1,25 +1,33 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
 # Virtual Environment
 venv/
-.env/
+.env
+.env.*
 
 # Database
 *.db
 
 # Logs
 *.log
+logs/
+
+# YOLO / AI outputs
+*.pt
+runs/
 
 # Videos
 *.mp4
 *.avi
 
-# OS
-.DS_Store
-Thumbs.db
-
 # IDE
 .vscode/
 .idea/
+
+# OS
+.DS_Store
+Thumbs.db

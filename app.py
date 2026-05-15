@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 import cv2
 
 from detector import HumanDetector
+from incident_manager import IncidentManager
 from event import (
     clear_event_logs,
     finalize_camera_sessions,
@@ -13,6 +14,26 @@ from event import (
     reset_runtime_state,
     update_session_event,
 )
+
+def _draw_corner_rect(img, pt1, pt2, color, thickness, r, d):
+    x1, y1 = pt1
+    x2, y2 = pt2
+
+    # Top Left
+    cv2.line(img, (x1, y1), (x1 + r, y1), color, thickness)
+    cv2.line(img, (x1, y1), (x1, y1 + r), color, thickness)
+
+    # Top Right
+    cv2.line(img, (x2, y1), (x2 - r, y1), color, thickness)
+    cv2.line(img, (x2, y1), (x2, y1 + r), color, thickness)
+
+    # Bottom Left
+    cv2.line(img, (x1, y2), (x1 + r, y2), color, thickness)
+    cv2.line(img, (x1, y2), (x1, y2 - r), color, thickness)
+
+    # Bottom Right
+    cv2.line(img, (x2, y2), (x2 - r, y2), color, thickness)
+    cv2.line(img, (x2, y2), (x2, y2 - r), color, thickness)
 from intent_manager import IntentManager
 from multi_view import compose_multiview
 from query_engine import QueryEngine
@@ -139,31 +160,32 @@ def draw_zone_overlays(frame, zones_list):
         )
 
 
-def _draw_global_status(frame, paused: bool, view_label: str, active_cameras: int):
-    status = f"Surveillance | {view_label} | Active cameras: {active_cameras}"
+def _draw_global_status(frame, paused: bool, view_label: str, active_cameras: int, incident_manager: IncidentManager = None):
+    status = f"SENTINEL AI | {view_label} | ACTIVE: {active_cameras}"
     if paused:
         status += " | PAUSED"
 
-    controls = "1-9 fullscreen | M multi-view | SPACE pause/play | LEFT/RIGHT seek | Q quit"
-    cv2.rectangle(frame, (0, 0), (frame.shape[1], 58), (0, 0, 0), cv2.FILLED)
-    cv2.putText(
-        frame,
-        status,
-        (12, 22),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.62,
-        (255, 255, 255),
-        2,
-    )
-    cv2.putText(
-        frame,
-        controls,
-        (12, 46),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
-        (255, 255, 255),
-        1,
-    )
+    # Draw header
+    cv2.rectangle(frame, (0, 0), (frame.shape[1], 60), (20, 20, 20), cv2.FILLED)
+    cv2.line(frame, (0, 60), (frame.shape[1], 60), (0, 150, 255), 2)
+    
+    cv2.putText(frame, status, (20, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
+    
+    controls = "1-9: Zoom | M: Multi | SPACE: Pause | LEFT/RIGHT: Seek | Q: Quit"
+    cv2.putText(frame, controls, (frame.shape[1] - 500, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+    
+    # Draw Incident Log (Right Side)
+    if incident_manager:
+        incidents = incident_manager.get_recent_incidents(5)
+        panel_x = frame.shape[1] - 300
+        cv2.rectangle(frame, (panel_x, 60), (frame.shape[1], 250), (20, 20, 20), cv2.FILLED)
+        cv2.rectangle(frame, (panel_x, 60), (frame.shape[1], 250), (0, 150, 255), 1)
+        cv2.putText(frame, "INCIDENT LOG", (panel_x + 10, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 150, 255), 1)
+        
+        for i, inc in enumerate(incidents):
+            color = (0, 0, 255) if inc["type"] == "Intrusion" else (0, 255, 255)
+            text = f"[{inc['timestamp']}] GID {inc['global_id']} - {inc['type']}"
+            cv2.putText(frame, text, (panel_x + 10, 115 + i * 25), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
 
 def capture_static_frame(camera_config):
@@ -316,6 +338,7 @@ def _process_camera_frame(
     camera_state: CameraRuntime,
     detector: HumanDetector,
     identity_manager: GlobalIdentityManager,
+    incident_manager: IncidentManager,
     session_mode: str,
 ) -> None:
     if camera_state.finished:
@@ -389,14 +412,43 @@ def _process_camera_frame(
             event_mode=session_mode,
         )
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        # Update Incident Risk
+        session_key = ("multi", global_id) if session_mode == "multi" else ("single", camera_state.camera_id, global_id)
+        from event import sessions
+        session = sessions.get(session_key)
+        
+        risk_data = {"score": 0, "level": "LOW", "behaviors": []}
+        if session:
+            zone_id = session.get("zone_id")
+            zone_name = "Unknown"
+            for z in camera_state.pixel_zones:
+                if z.get("id") == zone_id:
+                    zone_name = z.get("name", f"Zone {zone_id}")
+                    break
+            
+            risk_data = incident_manager.update_risk(global_id, {
+                "duration": float(session.get("last_video_time", 0) - session.get("entry_video_time", 0)),
+                "zone_name": zone_name
+            })
+
+        # Visuals
+        color = (0, 255, 0) # Green
+        if risk_data["level"] == "MEDIUM": color = (0, 255, 255) # Yellow
+        if risk_data["level"] == "HIGH": color = (0, 0, 255) # Red
+        
+        _draw_corner_rect(frame, (x1, y1), (x2, y2), color, 2, 15, 5)
+        
+        label = f"{locked_type} GID {global_id}"
+        if risk_data["score"] > 0:
+            label += f" | RISK: {risk_data['score']}"
+        
         cv2.putText(
             frame,
-            f"{locked_type} GID {global_id}",
+            label,
             (x1, max(16, y1 - 10)),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 0),
+            0.5,
+            color,
             2,
         )
 
@@ -430,7 +482,7 @@ def _advance_cameras(camera_states: List[CameraRuntime]) -> None:
         camera_state.display_frame = None
 
 
-def run_surveillance_mode(camera_configs, detector, identity_manager, session_mode: str):
+def run_surveillance_mode(camera_configs, detector, identity_manager, incident_manager, session_mode: str):
     camera_states = []
     for camera_config in camera_configs:
         camera_state = _create_camera_runtime(camera_config)
@@ -460,7 +512,7 @@ def run_surveillance_mode(camera_configs, detector, identity_manager, session_mo
             if not paused or any(state.display_frame is None for state in camera_states if not state.finished):
                 for camera_state in camera_states:
                     if not paused or camera_state.display_frame is None:
-                        _process_camera_frame(camera_state, detector, identity_manager, session_mode)
+                        _process_camera_frame(camera_state, detector, identity_manager, incident_manager, session_mode)
 
             feed_views = []
             for camera_state in camera_states:
@@ -482,7 +534,7 @@ def run_surveillance_mode(camera_configs, detector, identity_manager, session_mo
                 else "Multi-view"
             )
             canvas = compose_multiview(feed_views, fullscreen_camera_id=fullscreen_camera_id)
-            _draw_global_status(canvas, paused, view_label, active_cameras)
+            _draw_global_status(canvas, paused, view_label, active_cameras, incident_manager)
             cv2.imshow(window_name, canvas)
 
             key = cv2.waitKeyEx(30 if paused else max(1, int(1000 / TARGET_PROCESS_FPS)))
@@ -531,6 +583,7 @@ def main():
     clear_event_logs()
     detector = HumanDetector()
     identity_manager = GlobalIdentityManager()
+    incident_manager = IncidentManager()
     intent_manager = IntentManager()
     query_engine = QueryEngine()
     configure_zones_at_startup(camera_configs)
@@ -539,16 +592,31 @@ def main():
         print("\nSelect Mode:")
         print("1. Full Surveillance Mode")
         print("2. Query-Based Mode")
+        print("3. AI Session Summary")
         print("q. Quit")
 
-        choice = input("Enter choice (1/2/q): ").strip().lower()
+        choice = input("Enter choice (1/2/3/q): ").strip().lower()
 
         if choice == "1":
-            should_continue = run_surveillance_mode(camera_configs, detector, identity_manager, session_mode)
+            should_continue = run_surveillance_mode(camera_configs, detector, identity_manager, incident_manager, session_mode)
             if not should_continue:
                 return
         elif choice == "2":
             run_query_mode(query_engine, intent_manager, session_mode)
+        elif choice == "3":
+            print("\nGenerating AI Security Report...")
+            if intent_manager.llm_parser:
+                summary = intent_manager.llm_parser.summarize_incidents(incident_manager.incidents)
+                print("\n" + "="*50)
+                print("SENTINEL AI - SECURITY DEBRIEF")
+                print("="*50)
+                print(summary)
+                print("="*50)
+            else:
+                print("\n[!] LLM Parser not configured (GROQ_API_KEY missing).")
+                print("Recent Incidents:")
+                for inc in incident_manager.get_recent_incidents(10):
+                    print(f"- [{inc['timestamp']}] GID {inc['global_id']}: {inc['type']} - {inc['description']}")
         elif choice == "q":
             break
         else:
