@@ -2,6 +2,7 @@ import json
 import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
+from db_schema import get_db_path
 
 
 class QueryEngine:
@@ -14,10 +15,11 @@ class QueryEngine:
         "bike": "motorcycle",
         "bicycle": "motorcycle",
         "motorcycle": "motorcycle",
+        "vehicle": "car",
     }
 
-    def __init__(self, db_path="events.db"):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        self.db_path = db_path or get_db_path()
 
     def run_query(
         self,
@@ -64,6 +66,13 @@ class QueryEngine:
         if isinstance(zone_id, int):
             sql += " AND zone_id = ?"
             params.append(zone_id)
+
+        camera_id = filters.get("camera_id")
+        if isinstance(camera_id, int):
+            # Check if camera is in the JSON list of cameras OR matches camera_id
+            sql += " AND (camera_id = ? OR cameras LIKE ?)"
+            params.append(camera_id)
+            params.append(f"%{camera_id}%")
 
         track_id = filters.get("track_id")
         if isinstance(track_id, int):
@@ -162,6 +171,11 @@ class QueryEngine:
         for keyword, normalized in self.OBJECT_KEYWORDS.items():
             if keyword in query_lower:
                 filters["object"] = normalized
+
+        # Camera ID search
+        camera_match = re.search(r"camera\s*(\d+)", query_lower)
+        if camera_match:
+            filters["camera_id"] = int(camera_match.group(1))
 
         track_match = re.search(r"track(?:_?id)?\s*[:=#]?\s*(\d+)", query_lower)
         if track_match:

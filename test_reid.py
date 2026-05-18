@@ -1,9 +1,16 @@
-import unittest
 import sqlite3
+import unittest
 
 import numpy as np
 
-from event import clear_event_logs, finalize_camera_sessions, get_playback_segments, init_db, update_session_event
+from db_schema import connect_db
+from event import (
+    clear_event_logs,
+    finalize_camera_sessions,
+    get_playback_segments,
+    init_db,
+    update_session_event,
+)
 from reid import GlobalIdentityManager
 
 
@@ -19,6 +26,14 @@ class FixedEmbedder:
 
     def extract(self, frame, bbox):
         return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+
+class LowSimEmbedder:
+    embedding_size = 4
+
+    def extract(self, frame, bbox):
+        # Resulting dot product with [1, 0, 0, 0] will be 0.6
+        return np.array([0.6, 0.8, 0.0, 0.0], dtype=np.float32)
 
 
 class GlobalIdentityManagerTests(unittest.TestCase):
@@ -73,7 +88,9 @@ class GlobalIdentityManagerTests(unittest.TestCase):
         self.assertEqual(original_global_id, reacquired_global_id)
 
     def test_same_looking_car_after_time_window_gets_new_global_id(self):
-        manager = GlobalIdentityManager(similarity_threshold=0.8, spatial_threshold=80.0)
+        manager = GlobalIdentityManager(
+            similarity_threshold=0.8, spatial_threshold=80.0, match_window_seconds=3.0
+        )
         first_bbox = (20, 40, 80, 100)
         far_bbox = (210, 40, 270, 100)
 
@@ -155,7 +172,7 @@ class GlobalIdentityManagerTests(unittest.TestCase):
         self.assertEqual(first_global_id, second_global_id)
 
     def test_cross_camera_match_expires_after_three_seconds(self):
-        manager = GlobalIdentityManager(similarity_threshold=0.8)
+        manager = GlobalIdentityManager(similarity_threshold=0.8, match_window_seconds=3.0)
         bbox = (30, 50, 110, 170)
         frame = make_frame(bbox, color=(0, 255, 0), shape=(360, 480, 3))
 
@@ -211,7 +228,7 @@ class GlobalIdentityManagerTests(unittest.TestCase):
         self.assertEqual(manager.identity_store[global_id].last_seen_time, 2.5)
 
     def test_exact_three_second_gap_creates_new_global_id(self):
-        manager = GlobalIdentityManager(similarity_threshold=0.8)
+        manager = GlobalIdentityManager(similarity_threshold=0.8, match_window_seconds=3.0)
         bbox = (30, 50, 110, 170)
         frame = make_frame(bbox, color=(0, 255, 0), shape=(360, 480, 3))
 
@@ -239,9 +256,10 @@ class GlobalIdentityManagerTests(unittest.TestCase):
 
     def test_different_shirt_color_prevents_close_identity_merge(self):
         manager = GlobalIdentityManager(similarity_threshold=0.8)
-        manager.embedder = FixedEmbedder()
+        manager.embedder = LowSimEmbedder()
         bbox = (30, 50, 110, 170)
 
+        # First person with specific color
         first_global_id = manager.assign_global_id(
             camera_id=1,
             track_id=10,
@@ -251,8 +269,12 @@ class GlobalIdentityManagerTests(unittest.TestCase):
             current_time=1.0,
         )
 
+        # Clear mappings to force re-match
         manager.clear_camera_track_mappings(camera_id=1)
+        # Store the first person's embedding as [1, 0, 0, 0] in history manually for control
+        manager.identity_store[first_global_id].embedding = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
+        # Second person with DIFFERENT color (Red vs Blue)
         second_global_id = manager.assign_global_id(
             camera_id=1,
             track_id=11,
@@ -274,7 +296,7 @@ class PlaybackSessionTests(unittest.TestCase):
         clear_event_logs()
 
     def test_get_playback_segments_uses_session_window_for_global_id(self):
-        conn = sqlite3.connect("events.db")
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.executemany(
             """
@@ -391,7 +413,7 @@ class PlaybackSessionTests(unittest.TestCase):
         )
         finalize_camera_sessions(camera_id=2, video_path="cam2.mp4")
 
-        conn = sqlite3.connect("events.db")
+        conn = connect_db()
         cursor = conn.cursor()
         cursor.execute("SELECT global_id, cameras, video_paths FROM events")
         rows = cursor.fetchall()

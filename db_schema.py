@@ -59,7 +59,13 @@ def ensure_valid_schema() -> str:
                 zone_id INTEGER,
                 event_type TEXT,
                 event_mode TEXT,
-                mode_type TEXT
+                mode_type TEXT,
+                entry_time TEXT,
+                exit_time TEXT,
+                duration REAL DEFAULT 0,
+                stayed INTEGER DEFAULT 0,
+                cameras TEXT,
+                video_paths TEXT
             )
             """
         )
@@ -70,6 +76,12 @@ def ensure_valid_schema() -> str:
         _ensure_column(cursor, "events", "global_id", "INTEGER")
         _ensure_column(cursor, "events", "event_mode", "TEXT")
         _ensure_column(cursor, "events", "mode_type", "TEXT")
+        _ensure_column(cursor, "events", "entry_time", "TEXT")
+        _ensure_column(cursor, "events", "exit_time", "TEXT")
+        _ensure_column(cursor, "events", "duration", "REAL DEFAULT 0")
+        _ensure_column(cursor, "events", "stayed", "INTEGER DEFAULT 0")
+        _ensure_column(cursor, "events", "cameras", "TEXT")
+        _ensure_column(cursor, "events", "video_paths", "TEXT")
 
         cursor.execute(
             """
@@ -120,6 +132,36 @@ def ensure_valid_schema() -> str:
             """
             CREATE INDEX IF NOT EXISTS idx_events_mode_timestamp
             ON events (mode_type, timestamp)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_events_object_type
+            ON events (object_type)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_events_track_id
+            ON events (track_id)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_events_stayed
+            ON events (stayed)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_tracking_camera_global_lookup
+            ON tracking_data (camera_id, video_path, global_id, frame_number)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_events_session_lookup
+            ON events (camera_id, video_path, zone_id, global_id, entry_time, exit_time)
             """
         )
 

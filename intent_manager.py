@@ -92,6 +92,14 @@ class IntentManager:
         if isinstance(global_id, int):
             filters["global_id"] = global_id
 
+        camera_id = self.intent.get("camera_id")
+        if isinstance(camera_id, int):
+            filters["camera_id"] = camera_id
+        else:
+            fallback_cam = self._extract_camera_id(self.last_query)
+            if fallback_cam is not None:
+                filters["camera_id"] = fallback_cam
+
         zone = self.intent.get("zone")
         zone_candidate = zone or self._zone_from_query(self.last_query.lower())
         if zone_candidate is not None:
@@ -130,6 +138,10 @@ class IntentManager:
         global_id = self._extract_global_id(lower_query)
         if global_id is not None:
             parsed["global_id"] = global_id
+
+        camera_id = self._extract_camera_id(lower_query)
+        if camera_id is not None:
+            parsed["camera_id"] = camera_id
 
         zone_candidate = self._zone_from_query(lower_query)
         if zone_candidate is not None:
@@ -192,6 +204,12 @@ class IntentManager:
 
     def _extract_global_id(self, query: str) -> Optional[int]:
         match = re.search(r"global(?:_?id)?\s*[:=#]?\s*(\d+)", query)
+        if match:
+            return int(match.group(1))
+        return None
+
+    def _extract_camera_id(self, query: str) -> Optional[int]:
+        match = re.search(r"camera\s*(\d+)", query)
         if match:
             return int(match.group(1))
         return None

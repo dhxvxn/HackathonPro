@@ -3,7 +3,9 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, Hashable, List, Optional, Tuple
 
-DB_PATH = "events.db"
+from db_schema import connect_db, get_db_path
+
+DB_PATH = get_db_path()
 
 # keeps active in-memory sessions; multi-camera mode keys by global_id,
 # single-camera mode keys by camera + global_id.
@@ -105,143 +107,12 @@ def _point_inside_zone(centroid, zone):
 
 
 def _connect():
-    return sqlite3.connect(DB_PATH)
-
-
-def _get_columns(cursor, table_name: str) -> set:
-    cursor.execute(f"PRAGMA table_info({table_name})")
-    return {row[1] for row in cursor.fetchall()}
-
-
-def _ensure_column(cursor, table_name: str, column_name: str, definition: str) -> None:
-    columns = _get_columns(cursor, table_name)
-    if column_name not in columns:
-        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+    return connect_db()
 
 
 def init_db():
-    conn = _connect()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            object_type TEXT,
-            track_id INTEGER,
-            global_id INTEGER,
-            camera_id INTEGER,
-            video_path TEXT,
-            frame_number INTEGER,
-            frame_start INTEGER,
-            frame_end INTEGER,
-            video_time REAL,
-            zone_id INTEGER,
-            event_type TEXT,
-            event_mode TEXT,
-            mode_type TEXT
-        )
-        """
-    )
-
-    _ensure_column(cursor, "events", "frame_number", "INTEGER")
-    _ensure_column(cursor, "events", "frame_start", "INTEGER")
-    _ensure_column(cursor, "events", "frame_end", "INTEGER")
-    _ensure_column(cursor, "events", "global_id", "INTEGER")
-    _ensure_column(cursor, "events", "entry_time", "TEXT")
-    _ensure_column(cursor, "events", "exit_time", "TEXT")
-    _ensure_column(cursor, "events", "duration", "REAL DEFAULT 0")
-    _ensure_column(cursor, "events", "stayed", "INTEGER DEFAULT 0")
-    _ensure_column(cursor, "events", "cameras", "TEXT")
-    _ensure_column(cursor, "events", "video_paths", "TEXT")
-    _ensure_column(cursor, "events", "event_mode", "TEXT")
-    _ensure_column(cursor, "events", "mode_type", "TEXT")
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS tracking_data (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            camera_id INTEGER,
-            video_path TEXT,
-            frame_number INTEGER NOT NULL,
-            track_id INTEGER NOT NULL,
-            global_id INTEGER,
-            object_type TEXT NOT NULL,
-            bbox_x1 INTEGER NOT NULL,
-            bbox_y1 INTEGER NOT NULL,
-            bbox_x2 INTEGER NOT NULL,
-            bbox_y2 INTEGER NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-
-    _ensure_column(cursor, "tracking_data", "global_id", "INTEGER")
-
-    cursor.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_tracking_data_unique
-        ON tracking_data (camera_id, video_path, frame_number, track_id)
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_tracking_lookup
-        ON tracking_data (camera_id, video_path, track_id, frame_number)
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_events_session_lookup
-        ON events (camera_id, video_path, zone_id, global_id, entry_time, exit_time)
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_events_object_type
-        ON events (object_type)
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_events_track_id
-        ON events (track_id)
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_events_global_id
-        ON events (global_id)
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_events_stayed
-        ON events (stayed)
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_tracking_global_lookup
-        ON tracking_data (global_id, frame_number)
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_tracking_camera_global_lookup
-        ON tracking_data (camera_id, video_path, global_id, frame_number)
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_events_mode_timestamp
-        ON events (event_mode, timestamp)
-        """
-    )
-
-    conn.commit()
-    conn.close()
+    # Schema is now managed by db_schema.py
+    connect_db(validate_schema=True)
 
 
 def clear_event_logs() -> None:
@@ -694,9 +565,9 @@ def get_global_id_camera_presence(global_id: int) -> List[Dict[str, object]]:
 
 
 def get_playback_segments(
-    video_path: str,
-    frame_start: Optional[int],
-    frame_end: Optional[int],
+    video_path: Optional[str] = None,
+    frame_start: Optional[int] = None,
+    frame_end: Optional[int] = None,
     camera_id: Optional[int] = None,
     track_id: Optional[int] = None,
     global_id: Optional[int] = None,
@@ -736,7 +607,7 @@ def get_playback_segments(
         sql += " AND camera_id = ?"
         params.append(camera_id)
 
-    if track_id is not None and global_id is None:
+    if track_id is not None and global_id is None and video_path is not None:
         sql += " AND video_path = ?"
         params.append(video_path)
 
@@ -751,8 +622,9 @@ def get_playback_segments(
         else:
             sql += " AND camera_id = ?"
             params.append(camera_id)
-        sql += " AND video_path = ?"
-        params.append(video_path)
+        if video_path:
+            sql += " AND video_path = ?"
+            params.append(video_path)
 
     window_entry = _iso_with_offset(entry_time, -SESSION_LINK_WINDOW_SECONDS)
     window_exit = _iso_with_offset(exit_time or entry_time, SESSION_LINK_WINDOW_SECONDS)
@@ -797,6 +669,7 @@ def get_playback_segments(
             "exit_time": exit_time,
         }
     ]
+
 
 
 def log_event(

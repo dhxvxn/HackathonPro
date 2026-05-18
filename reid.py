@@ -240,13 +240,15 @@ class GlobalIdentityManager:
         score_threshold: float = 0.45,
         embedding_memory_size: int = 10,
     ):
-        self.similarity_threshold = STRONG_REID_THRESHOLD
+        self.similarity_threshold = similarity_threshold
         self.spatial_threshold = spatial_threshold
-        self.cross_camera_similarity_threshold = STRONG_REID_THRESHOLD
-        self.match_window_seconds = MAX_TIME_DIFF_SECONDS
+        self.cross_camera_similarity_threshold = (
+            cross_camera_similarity_threshold or similarity_threshold
+        )
+        self.match_window_seconds = match_window_seconds
         self.embedding_cache_ttl_seconds = embedding_cache_ttl_seconds
         self.embedding_cache_iou_threshold = embedding_cache_iou_threshold
-        self.score_threshold = SOFT_MATCH_THRESHOLD
+        self.score_threshold = score_threshold
         self.embedding_memory_size = max(1, int(embedding_memory_size))
         self.next_global_id = 1
         self.global_id_map: Dict[int, np.ndarray] = {}
